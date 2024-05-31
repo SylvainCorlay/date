@@ -457,51 +457,12 @@ CONSTCD14 const sys_seconds min_seconds = sys_days(min_year/min_day);
 
 #endif  // USE_OS_TZDB
 
-#ifndef _WIN32
-
 static
 std::string
 discover_tz_dir()
 {
-    struct stat sb;
-    using namespace std;
-#  ifndef __APPLE__
-    CONSTDATA auto tz_dir_default = "/usr/share/zoneinfo";
-    CONSTDATA auto tz_dir_buildroot = "/usr/share/zoneinfo/uclibc";
-
-    // Check special path which is valid for buildroot with uclibc builds
-    if(stat(tz_dir_buildroot, &sb) == 0 && S_ISDIR(sb.st_mode))
-        return tz_dir_buildroot;
-    else if(stat(tz_dir_default, &sb) == 0 && S_ISDIR(sb.st_mode))
-        return tz_dir_default;
-    else
-        throw runtime_error("discover_tz_dir failed to find zoneinfo\n");
-#  else  // __APPLE__
-#      if TARGET_OS_IPHONE
-#          if TARGET_OS_SIMULATOR
-    return "/usr/share/zoneinfo";
-#          else
-    return "/var/db/timezone/zoneinfo";
-#          endif
-#      else
-    CONSTDATA auto timezone = "/etc/localtime";
-    if (!(lstat(timezone, &sb) == 0 && S_ISLNK(sb.st_mode) && sb.st_size > 0))
-        throw runtime_error("discover_tz_dir failed\n");
-    string result;
-    char rp[PATH_MAX+1] = {};
-    if (readlink(timezone, rp, sizeof(rp)-1) > 0)
-        result = string(rp);
-    else
-        throw system_error(errno, system_category(), "readlink() failed");
-    auto i = result.find("zoneinfo");
-    if (i == string::npos)
-        throw runtime_error("discover_tz_dir failed to find zoneinfo\n");
-    i = result.find('/', i);
-    if (i == string::npos)
-        throw runtime_error("discover_tz_dir failed to find '/'\n");
-    return result.substr(0, i);
-#      endif
-#  endif  // __APPLE__
+    std::string CONDA_PREFIX = std::getenv("CONDA_PREFIX");
+    return CONDA_PREFIX + folder_delimiter + "share" + folder_delimiter + "zoneinfo";
 }
 
 static
@@ -511,8 +472,6 @@ get_tz_dir()
     static const std::string tz_dir = discover_tz_dir();
     return tz_dir;
 }
-
-#endif
 
 // +-------------------+
 // | End Configuration |
@@ -607,7 +566,6 @@ parse_month(std::istream& in)
     return static_cast<unsigned>(++m);
 }
 
-#if !USE_OS_TZDB
 
 #ifdef _WIN32
 
@@ -811,6 +769,7 @@ load_timezone_mappings_from_xml_file(const std::string& input_path)
 
 #endif  // _WIN32
 
+#if !USE_OS_TZDB
 // Parsing helpers
 
 static
@@ -1840,9 +1799,15 @@ time_zone::time_zone(const std::string& s, detail::undocumented)
 
 enum class endian
 {
+#ifdef _WIN32
+    little = 0,
+    big = 1,
+    native = little
+#else
     native = __BYTE_ORDER__,
     little = __ORDER_LITTLE_ENDIAN__,
     big    = __ORDER_BIG_ENDIAN__
+#endif
 };
 
 static
@@ -2149,8 +2114,8 @@ time_zone::init_impl()
 {
     using namespace std;
     using namespace std::chrono;
-    auto name = get_tz_dir() + ('/' + name_);
-    std::ifstream inf(name);
+    auto name = get_tz_dir() + (folder_delimiter + name_);
+    std::ifstream inf(name, std::io::in | std::ios::binary);
     if (!inf.is_open())
         throw std::runtime_error{"Unable to open " + name};
     inf.exceptions(std::ios::failbit | std::ios::badbit);
@@ -3825,7 +3790,13 @@ locate_zone(std::string_view tz_name)
 locate_zone(const std::string& tz_name)
 #endif
 {
-    return get_tzdb().locate_zone(tz_name);
+    #if _WIN32 && USE_OS_TZDB
+        std::string local_tz_name = tz_name;
+        std::replace(local_tz_name.begin(), local_tz_name.end(), '/', '\\');
+        return get_tzdb().locate_zone(local_tz_name);
+    #else
+        return get_tzdb().locate_zone(tz_name);
+    #endif
 }
 
 #if USE_OS_TZDB
